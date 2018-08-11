@@ -42,6 +42,16 @@
 -type state() :: #state{}.
 
 %%==============================================================================
+%% Defines
+%%==============================================================================
+-define(TRIGGER_CHARS, [ <<":">>
+                       , <<"#">>
+                       , <<".">>
+                       , <<"?">>
+                       , <<"-">>
+                       ]).
+
+%%==============================================================================
 %% ranch_protocol callbacks
 %%==============================================================================
 -spec start_link(ranch:ref(), any(), module(), any()) -> {ok, pid()}.
@@ -125,13 +135,14 @@ handle_request(Socket, Request) ->
   {response, map()} | {} | {notification, binary(), map()}.
 handle_method(<<"initialize">>, _Params) ->
   Result = #{ capabilities =>
-                #{ hoverProvider => false
+                #{ hoverProvider => true
                  , completionProvider =>
                      #{ resolveProvider => false
-                      , triggerCharacters => [<<":">>, <<"#">>]
+                      , triggerCharacters => ?TRIGGER_CHARS
                       }
                  , textDocumentSync => 1
                  , definitionProvider => true
+                 , referencesProvider => true
                  }
             },
   {response, Result};
@@ -154,11 +165,11 @@ handle_method(<<"textDocument/didChange">>, Params) ->
 handle_method(<<"textDocument/hover">>, _Params) ->
   {response, null};
 handle_method(<<"textDocument/completion">>, Params) ->
-  Position     = maps:get(<<"position">> , Params),
-  Line         = maps:get(<<"line">>     , Position),
-  Character    = maps:get(<<"character">>, Position),
-  TextDocument = maps:get(<<"textDocument">>  , Params),
-  Uri          = maps:get(<<"uri">>      , TextDocument),
+  Position     = maps:get(<<"position">>     , Params),
+  Line         = maps:get(<<"line">>         , Position),
+  Character    = maps:get(<<"character">>    , Position),
+  TextDocument = maps:get(<<"textDocument">> , Params),
+  Uri          = maps:get(<<"uri">>          , TextDocument),
   {ok, Buffer} = erlang_ls_buffer_server:get_buffer(Uri),
   Result       = erlang_ls_buffer:get_completions(Buffer, Line, Character),
   {response, Result};
@@ -175,18 +186,32 @@ handle_method(<<"textDocument/definition">>, Params) ->
   TextDocument = maps:get(<<"textDocument">>, Params),
   Uri          = maps:get(<<"uri">>         , TextDocument),
   {ok, Buffer} = erlang_ls_buffer_server:get_buffer(Uri),
-  {M, F, A}    = erlang_ls_buffer:get_mfa(Buffer, Line, Character),
-  Which = code:which(M),
-  Source = list_to_binary(proplists:get_value( source
-                                             , M:module_info(compile))),
-  DefUri = <<"file://", Source/binary>>,
-  {ok, {_, [{abstract_code, {_, AC}}]}} = beam_lib:chunks(Which, [abstract_code]),
-  Result = case [ AL || {function, AL, AF, AA, _} <- AC, F =:= AF, A =:= AA] of
-             [DefLine] ->
-               #{ uri => DefUri
-                , range => erlang_ls_protocol:range(erl_anno:line(DefLine) - 1)
-                };
-             [] ->
+  Element      = erlang_ls_buffer:get_element_at_pos(Buffer, Line + 1, Character + 1),
+  Result = case erl_syntax:type(Element) of
+             application ->
+               Op = erl_syntax:application_operator(Element),
+               A  = length(erl_syntax:application_arguments(Element)),
+               case erl_syntax:type(Op) of
+                 module_qualifier ->
+                   M = list_to_atom(erl_syntax:atom_name(erl_syntax:module_qualifier_argument(Op))),
+                   F = list_to_atom(erl_syntax:atom_name(erl_syntax:module_qualifier_body(Op))),
+                   Which = code:which(M),
+                   Source = list_to_binary(proplists:get_value( source
+                                                              , M:module_info(compile))),
+                   DefUri = <<"file://", Source/binary>>,
+                   {ok, {_, [{abstract_code, {_, AC}}]}} = beam_lib:chunks(Which, [abstract_code]),
+                   case [ AL || {function, AL, AF, AA, _} <- AC, F =:= AF, A =:= AA] of
+                     [DefLine] ->
+                       #{ uri => DefUri
+                        , range => erlang_ls_protocol:range(erl_anno:line(DefLine) - 1)
+                        };
+                     [] ->
+                       null
+                   end;
+                 _ ->
+                   null
+               end;
+             _ ->
                null
            end,
   {response, Result};

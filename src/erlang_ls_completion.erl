@@ -1,7 +1,34 @@
 -module(erlang_ls_completion).
 
--export([ record_definitions/0
+-export([ keywords/0
+        , module_attributes/0
+        , record_definitions/0
         ]).
+
+keywords() ->
+  [ 'case'
+  , 'end'
+  , 'try'
+  ].
+
+-spec module_attributes() -> [atom()].
+module_attributes() ->
+  [ behaviour
+  , callback
+  , compile
+  , define
+  , export
+  , file
+  , import
+  , include
+  , include_lib
+  , module
+  , on_load
+  , record
+  , spec
+  , type
+  , vsn
+  ].
 
 %% TODO: Store these in an ETS table
 -spec record_definitions() -> [atom()].
